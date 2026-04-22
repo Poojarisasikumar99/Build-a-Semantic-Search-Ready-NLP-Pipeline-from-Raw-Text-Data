@@ -1,0 +1,135 @@
+# ================================
+# 1. Install & Import Libraries
+# ================================
+!pip install nltk spacy scikit-learn gensim datasets matplotlib
+
+import nltk
+import spacy
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from nltk.corpus import stopwords
+from datasets import load_dataset
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from gensim.models import Word2Vec
+from collections import Counter
+
+nltk.download('stopwords')
+nlp = spacy.load("en_core_web_sm")
+
+# ================================
+# 2. Load Dataset (HuggingFace)
+# ================================
+dataset = load_dataset("imdb", split="train[:2000]")
+texts = [x['text'] for x in dataset]
+
+# ================================
+# 3. Text Cleaning
+# ================================
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'<.*?>', '', text)
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    return text
+
+cleaned_texts = [clean_text(t) for t in texts]
+
+# ================================
+# 4. Tokenization + Stopword Removal + Lemmatization
+# ================================
+stop_words = set(stopwords.words('english'))
+
+def preprocess(text):
+    doc = nlp(text)
+    tokens = []
+    for token in doc:
+        if token.text not in stop_words and token.is_alpha:
+            tokens.append(token.lemma_)
+    return tokens
+
+processed_texts = [preprocess(t) for t in cleaned_texts]
+
+# ================================
+# 5. Vocabulary Creation
+# ================================
+vocab = set()
+for tokens in processed_texts:
+    vocab.update(tokens)
+
+print("Vocabulary size:", len(vocab))
+
+# ================================
+# 6. Bag of Words / TF-IDF
+# ================================
+joined_texts = [" ".join(tokens) for tokens in processed_texts]
+
+# BoW
+bow_vectorizer = CountVectorizer()
+bow_vectors = bow_vectorizer.fit_transform(joined_texts)
+
+# TF-IDF
+tfidf_vectorizer = TfidfVectorizer()
+tfidf_vectors = tfidf_vectorizer.fit_transform(joined_texts)
+
+# ================================
+# 7. Word Embeddings (Word2Vec)
+# ================================
+w2v_model = Word2Vec(sentences=processed_texts, vector_size=100, window=5, min_count=2)
+
+# Example similar words
+print("Similar to 'good':", w2v_model.wv.most_similar("good", topn=3))
+
+# ================================
+# 8. Sentence Embeddings
+# ================================
+def sentence_embedding(tokens):
+    vectors = []
+    for word in tokens:
+        if word in w2v_model.wv:
+            vectors.append(w2v_model.wv[word])
+    return np.mean(vectors, axis=0) if vectors else np.zeros(100)
+
+sentence_vectors = np.array([sentence_embedding(t) for t in processed_texts])
+
+# ================================
+# 9. Similarity Search
+# ================================
+def find_similar(query, top_n=5):
+    query = clean_text(query)
+    tokens = preprocess(query)
+    query_vec = sentence_embedding(tokens).reshape(1, -1)
+    
+    similarities = cosine_similarity(query_vec, sentence_vectors)[0]
+    top_indices = similarities.argsort()[-top_n:][::-1]
+    
+    results = []
+    for i in top_indices:
+        results.append((similarities[i], texts[i][:200]))
+    return results
+
+# Example Query
+query = "This movie was amazing and emotional"
+results = find_similar(query)
+
+print("\nTop Similar Reviews:\n")
+for score, text in results:
+    print(f"Score: {score:.3f}")
+    print(text)
+    print("-"*50)
+
+# ================================
+# 10. Insights & Visualization
+# ================================
+all_words = [word for tokens in processed_texts for word in tokens]
+word_freq = Counter(all_words).most_common(20)
+
+words, counts = zip(*word_freq)
+
+plt.figure(figsize=(10,5))
+plt.bar(words, counts)
+plt.xticks(rotation=45)
+plt.title("Top 20 Words")
+plt.show()
